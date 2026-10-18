@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "ReviewSpy AI - Amazon & Shopify Insights",
+  "version": "1.0.0",
+  "description": "Extract customer reviews and generate AI competitor insights, product flaws, and marketing hooks.",
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Open ReviewSpy AI Side Panel"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.amazon.com/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "scripts/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.amazon.com/*"],
+      "js": ["scripts/content-amazon.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*/*"],
+      "js": ["scripts/content-shopify.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

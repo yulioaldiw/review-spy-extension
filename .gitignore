@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node & dependencies
+node_modules/
+package-lock.json
+
+# Environment variables & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Build & packaging artifacts
+*.zip
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*

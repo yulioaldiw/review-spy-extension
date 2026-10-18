@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ReviewSpy AI</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <!-- Header Bar -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo">🕵️‍♂️</div>
+      <div class="brand-info">
+        <h1>ReviewSpy <span class="ai-badge">AI</span></h1>
+        <p class="brand-subtitle">Competitor Intelligence</p>
+      </div>
+    </div>
+    <div class="header-status">
+      <span id="plan-badge" class="badge badge-free">FREE</span>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="nav-tabs">
+    <button class="tab-btn active" data-tab="tab-insights">
+      <span class="icon">✨</span> Insights
+    </button>
+    <button class="tab-btn" data-tab="tab-reviews">
+      <span class="icon">📋</span> Reviews (<span id="tab-review-count">0</span>)
+    </button>
+    <button class="tab-btn" data-tab="tab-settings">
+      <span class="icon">⚙️</span> Settings
+    </button>
+  </nav>
+
+  <!-- Product Context Banner -->
+  <section id="product-card" class="product-banner hidden">
+    <img id="product-img" src="" alt="Product" class="product-thumb">
+    <div class="product-meta">
+      <span id="platform-tag" class="platform-tag">AMAZON</span>
+      <h3 id="product-title" class="product-title">Loading product...</h3>
+      <div class="product-sub">
+        <span id="product-asin" class="product-asin">ASIN: -</span>
+        <span id="product-price" class="product-price"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Content Areas -->
+  <main class="content-area">
+
+    <!-- TAB 1: AI INSIGHTS -->
+    <div id="tab-insights" class="tab-content active">
+      <!-- Unsupported Page Warning -->
+      <div id="unsupported-banner" class="alert-box alert-info">
+        <div class="alert-icon">💡</div>
+        <div class="alert-text">
+          <strong>Navigate to a Product Page</strong>
+          <p>Open any product on <strong>Amazon.com</strong> or a <strong>Shopify</strong> store to start spying on customer reviews.</p>
+        </div>
+      </div>
+
+      <!-- Action Panel -->
+      <div id="action-panel" class="action-panel hidden">
+        <button id="btn-analyze" class="btn btn-primary btn-block">
+          <span class="btn-icon">⚡</span> Analyze Competitor Reviews
+        </button>
+        <div id="quota-indicator" class="quota-text">Free analyses left this month: <strong id="quota-left">3</strong></div>
+      </div>
+
+      <!-- Loading State -->
+      <div id="loading-state" class="state-container hidden">
+        <div class="spinner"></div>
+        <h4 id="loading-title">Extracting Customer Reviews...</h4>
+        <p id="loading-subtitle">Paginating and analyzing sentiment with Gemini AI...</p>
+      </div>
+
+      <!-- Empty / Ready State -->
+      <div id="empty-state" class="state-container hidden">
+        <div class="empty-icon">📊</div>
+        <h4>No Analysis Yet</h4>
+        <p>Click "Analyze Competitor Reviews" above to discover flaws, missing features, and ad hooks.</p>
+      </div>
+
+      <!-- Results Container -->
+      <div id="results-container" class="results-container hidden">
+        <!-- Executive Summary -->
+        <div class="card summary-card">
+          <div class="summary-header">
+            <h4>Executive Summary</h4>
+            <span id="satisfaction-badge" class="satisfaction-badge">85% Satisfaction</span>
+          </div>
+          <p id="summary-text" class="summary-text"></p>
+        </div>
+
+        <!-- Section: Top Complaints -->
+        <div class="card card-complaints">
+          <div class="card-header">
+            <span class="card-icon">🔴</span>
+            <h4>Top Customer Complaints (Flaws to Fix)</h4>
+          </div>
+          <div id="complaints-list" class="insights-list"></div>
+        </div>
+
+        <!-- Section: Feature Opportunities -->
+        <div class="card card-opportunities">
+          <div class="card-header">
+            <span class="card-icon">💡</span>
+            <h4>Unmet Needs & Feature Opportunities</h4>
+          </div>
+          <div id="opportunities-list" class="insights-list"></div>
+        </div>
+
+        <!-- Section: What Customers Love -->
+        <div class="card card-strengths">
+          <div class="card-header">
+            <span class="card-icon">🟢</span>
+            <h4>What Customers Love (Must-Keep Features)</h4>
+          </div>
+          <ul id="strengths-list" class="bullet-list"></ul>
+        </div>
+
+        <!-- Section: Marketing Hooks -->
+        <div class="card card-hooks">
+          <div class="card-header">
+            <span class="card-icon">🎯</span>
+            <h4>High-Converting Ad Hooks</h4>
+          </div>
+          <div id="hooks-list" class="hooks-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: RAW REVIEWS -->
+    <div id="tab-reviews" class="tab-content">
+      <div class="reviews-toolbar">
+        <input type="text" id="review-search" placeholder="Search reviews by keyword..." class="input-search">
+        <button id="btn-export-csv" class="btn btn-secondary">
+          <span>📥</span> Export CSV
+        </button>
+      </div>
+      <div id="reviews-list-container" class="reviews-list-container">
+        <div class="empty-reviews">No reviews extracted yet. Open a product page and click Analyze.</div>
+      </div>
+    </div>
+
+    <!-- TAB 3: SETTINGS -->
+    <div id="tab-settings" class="tab-content">
+      <!-- Gemini API Key Configuration -->
+      <div class="card settings-card">
+        <h4>🔑 Google Gemini API Key</h4>
+        <p class="settings-desc">Required to run AI analysis. Free to get with no credit card required.</p>
+        <div class="form-group">
+          <input type="password" id="input-gemini-key" placeholder="AIzaSy..." class="input-text">
+          <button id="btn-toggle-key-visibility" class="btn-icon-only" title="Show/Hide">👁️</button>
+        </div>
+        <div class="settings-actions">
+          <button id="btn-save-key" class="btn btn-primary btn-sm">Save Key</button>
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" class="link-external">Get Free Key ↗</a>
+        </div>
+        <span id="key-save-status" class="status-msg"></span>
+      </div>
+
+      <!-- Pro License Verification -->
+      <div class="card settings-card">
+        <h4>💎 Pro License (Lemon Squeezy)</h4>
+        <p class="settings-desc">Upgrade for unlimited analyses, instant CSV export, and priority AI processing.</p>
+        <div class="form-group">
+          <input type="text" id="input-license-key" placeholder="Enter license key (XXXX-XXXX-XXXX)" class="input-text">
+        </div>
+        <div class="settings-actions">
+          <button id="btn-validate-license" class="btn btn-secondary btn-sm">Activate License</button>
+          <a href="https://lemonsqueezy.com" target="_blank" class="link-external">Buy Pro (\$19/mo) ↗</a>
+        </div>
+        <span id="license-save-status" class="status-msg"></span>
+      </div>
+
+      <!-- App Info -->
+      <div class="card settings-card app-info-card">
+        <h4>About ReviewSpy AI</h4>
+        <p>Version: 1.0.0 (Manifest V3)</p>
+        <p>Built for US Amazon FBA & Shopify Solopreneurs.</p>
+        <button id="btn-clear-cache" class="btn btn-outline btn-sm">Clear Cached Analyses</button>
+      </div>
+    </div>
+
+  </main>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
