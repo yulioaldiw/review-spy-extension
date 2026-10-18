@@ -2,6 +2,11 @@
 (() => {
   'use strict';
 
+  // Immediately bail out if we are on Amazon
+  if (window.location.hostname.includes('amazon.')) {
+    return;
+  }
+
   // Check if current page is a Shopify store
   function isShopifyStore() {
     return !!(

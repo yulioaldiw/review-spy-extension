@@ -36,6 +36,16 @@
     },
     {
       "matches": ["https://*/*"],
+      "exclude_matches": [
+        "https://*.amazon.com/*",
+        "https://*.amazon.co.uk/*",
+        "https://*.amazon.de/*",
+        "https://*.amazon.ca/*",
+        "https://*.amazon.co.jp/*",
+        "https://*.amazon.fr/*",
+        "https://*.amazon.it/*",
+        "https://*.amazon.es/*"
+      ],
       "js": ["scripts/content-shopify.js"],
       "run_at": "document_idle"
     }

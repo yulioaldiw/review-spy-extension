@@ -153,6 +153,10 @@ function handleSupportedPage(res) {
     productImg.classList.add('hidden');
   }
 
+  if (res.localReviewCount) {
+    tabReviewCount.textContent = String(res.localReviewCount);
+  }
+
   // Check if we have cached analysis for this product
   checkCache(currentProduct);
 }
@@ -205,21 +209,81 @@ btnAnalyze.addEventListener('click', async () => {
 
   // Start Extraction & Analysis
   try {
-    showLoading('Extracting Reviews...', 'Reading customer reviews from product page...');
+    // 1. Ask content script to scrape reviews (including in-tab pagination if needed)
+    let reviews = [];
+    try {
+      const scrapeRes = await chrome.tabs.sendMessage(activeTabInfo.id, { type: 'SCRAPE_PAGE_REVIEWS' });
+      if (scrapeRes && scrapeRes.reviews && scrapeRes.reviews.length > 0) {
+        reviews = scrapeRes.reviews;
+      }
+    } catch (msgErr) {
+      console.warn('[ReviewSpy] Content script messaging failed, trying direct probe:', msgErr);
+    }
 
-    // 1. Get current page reviews from content script
-    const scrapeRes = await chrome.tabs.sendMessage(activeTabInfo.id, { type: 'SCRAPE_PAGE_REVIEWS' });
-    let reviews = (scrapeRes && scrapeRes.reviews) ? scrapeRes.reviews : [];
+    // 2. Direct DOM fallback via scripting API if message yielded 0 reviews
+    if (reviews.length === 0) {
+      showLoading('Scanning Page DOM...', 'Probing review elements directly on active tab...');
+      try {
+        const injectedResults = await chrome.scripting.executeScript({
+          target: { tabId: activeTabInfo.id },
+          func: () => {
+            const selectors = [
+              '[id^="customer_review-"]',
+              '[data-hook="review"]',
+              'div.review',
+              'li[data-hook="review"]',
+              '#cm-cr-dp-review-list li',
+              '#cm-cr-dp-review-list .a-section.review',
+              '[data-csa-c-content-id^="customer_review-"]'
+            ];
+            const found = Array.from(document.querySelectorAll(selectors.join(', ')));
+            return found.map(el => {
+              // Star
+              const starEl = el.querySelector('[data-hook="review-star-rating"], [data-hook="cmps-review-star-rating"], i.a-icon-star, .review-rating');
+              const match = starEl?.textContent.match(/([0-5](?:\.[0-9])?)/);
+              const rating = match ? parseFloat(match[1]) : 5;
 
-    // 2. If Amazon and fewer than 25 reviews, fetch page 1 & 2 of reviews in background
-    if (currentProduct.platform === 'amazon' && currentProduct.asin && reviews.length < 25) {
-      showLoading('Fetching More Reviews...', 'Paginating Amazon review pages...');
+              // Title
+              const titleEl = el.querySelector('[data-hook="review-title"], a.review-title, .review-title');
+              let title = '';
+              if (titleEl) {
+                const clone = titleEl.cloneNode(true);
+                clone.querySelectorAll('.a-icon-alt, i, .a-icon').forEach(n => n.remove());
+                title = clone.textContent.trim();
+              }
+
+              // Body
+              const bodyEl = el.querySelector('[data-hook="review-body"], .review-text-content, .review-text, [data-hook="review-collapsed"], .review-data');
+              const body = bodyEl ? bodyEl.textContent.replace(/Read more\s*$/i, '').trim() : '';
+
+              // Date & Verified
+              const dateEl = el.querySelector('[data-hook="review-date"], .review-date');
+              const date = dateEl ? dateEl.textContent.trim() : '';
+              const verified = !!el.querySelector('[data-hook="avp-badge"], [data-hook="avp-badge-linkless"]');
+
+              return { id: el.id || Math.random().toString(36), rating, title, body, date, verified };
+            }).filter(r => r.body || r.title);
+          }
+        });
+
+        if (injectedResults && injectedResults[0]?.result?.length > 0) {
+          reviews = injectedResults[0].result;
+          console.log(`[ReviewSpy] Direct DOM probe recovered ${reviews.length} reviews.`);
+        }
+      } catch (probeErr) {
+        console.warn('[ReviewSpy] Direct script injection failed:', probeErr);
+      }
+    }
+
+    // 3. Background fetch fallback if still < 10 reviews
+    if (reviews.length < 10 && currentProduct.platform === 'amazon' && currentProduct.asin) {
+      showLoading('Fetching Review Archive...', 'Querying Amazon reviews page...');
       const pagedReviews = await fetchAmazonPagedReviews(currentProduct.asin);
       reviews = deduplicateReviews([...reviews, ...pagedReviews]);
     }
 
     if (reviews.length === 0) {
-      throw new Error('No customer reviews could be found on this page. Make sure the product has customer reviews.');
+      throw new Error('No customer reviews could be found on this page. Please ensure you are viewing a product with customer reviews.');
     }
 
     currentReviews = reviews;
@@ -267,20 +331,25 @@ async function fetchAmazonPagedReviews(asin) {
       if (response && response.success && response.html) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(response.html, 'text/html');
-        const reviewEls = doc.querySelectorAll('div[data-hook="review"]');
+        const reviewEls = doc.querySelectorAll('[id^="customer_review-"], [data-hook="review"], .review, li[data-hook="review"]');
 
         reviewEls.forEach(el => {
-          const starEl = el.querySelector('i[data-hook="review-star-rating"] span.a-icon-alt');
+          const starEl = el.querySelector('[data-hook="review-star-rating"], [data-hook="cmps-review-star-rating"], i.a-icon-star, .review-rating');
           const match = starEl?.textContent.match(/([0-5](?:\.[0-9])?)/);
           const rating = match ? parseFloat(match[1]) : 5;
 
-          const titleEl = el.querySelector('a[data-hook="review-title"] span, span[data-hook="review-title"] span');
-          const title = titleEl ? titleEl.textContent.trim() : '';
+          const titleEl = el.querySelector('[data-hook="review-title"], a.review-title, .review-title');
+          let title = '';
+          if (titleEl) {
+            const clone = titleEl.cloneNode(true);
+            clone.querySelectorAll('.a-icon-alt, i, .a-icon').forEach(n => n.remove());
+            title = clone.textContent.trim();
+          }
 
-          const bodyEl = el.querySelector('span[data-hook="review-body"] span');
-          const body = bodyEl ? bodyEl.textContent.trim() : '';
+          const bodyEl = el.querySelector('[data-hook="review-body"], .review-text-content, .review-text, [data-hook="review-collapsed"], .review-data');
+          const body = bodyEl ? bodyEl.textContent.replace(/Read more\s*$/i, '').trim() : '';
 
-          const dateEl = el.querySelector('span[data-hook="review-date"]');
+          const dateEl = el.querySelector('[data-hook="review-date"], .review-date');
           const date = dateEl ? dateEl.textContent.trim() : '';
 
           if (body || title) {
@@ -290,7 +359,7 @@ async function fetchAmazonPagedReviews(asin) {
               title,
               body,
               date,
-              verified: !!el.querySelector('span[data-hook="avp-badge"]')
+              verified: !!el.querySelector('[data-hook="avp-badge"], [data-hook="avp-badge-linkless"]')
             });
           }
         });
