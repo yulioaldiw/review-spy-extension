@@ -107,11 +107,39 @@ async function updatePlanUI() {
   }
 }
 
+// Ensure content script is actively running in the tab
+async function ensureContentScriptInjected(tab) {
+  if (!tab || !tab.id || !tab.url) return;
+  const isAmazon = tab.url.includes('amazon.');
+  const isShopify = !isAmazon && (tab.url.includes('/products/') || tab.url.includes('myshopify.com'));
+
+  const fileToInject = isAmazon ? 'scripts/content-amazon.js' : (isShopify ? 'scripts/content-shopify.js' : null);
+  if (!fileToInject) return;
+
+  try {
+    const pong = await chrome.tabs.sendMessage(tab.id, { type: 'PING' });
+    if (pong && pong.pong) return;
+  } catch (err) {
+    try {
+      console.log(`[ReviewSpy] Dynamically injecting ${fileToInject} into tab ${tab.id}`);
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: [fileToInject]
+      });
+    } catch (injErr) {
+      console.warn('[ReviewSpy] Script injection failed:', injErr);
+    }
+  }
+}
+
 // Refresh Current Active Tab
 async function refreshActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id) return;
   activeTabInfo = tab;
+
+  // Make sure content script is active
+  await ensureContentScriptInjected(tab);
 
   // Ask content script for page details
   try {
@@ -207,14 +235,22 @@ btnAnalyze.addEventListener('click', async () => {
     return;
   }
 
+  // Ensure we have the latest active tab
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab && tab.id) activeTabInfo = tab;
+  await ensureContentScriptInjected(activeTabInfo);
+
   // Start Extraction & Analysis
   try {
+    showLoading('Extracting Reviews...', 'Reading customer reviews from product page...');
+
     // 1. Ask content script to scrape reviews (including in-tab pagination if needed)
     let reviews = [];
     try {
       const scrapeRes = await chrome.tabs.sendMessage(activeTabInfo.id, { type: 'SCRAPE_PAGE_REVIEWS' });
       if (scrapeRes && scrapeRes.reviews && scrapeRes.reviews.length > 0) {
         reviews = scrapeRes.reviews;
+        console.log(`[ReviewSpy] Content script returned ${reviews.length} reviews.`);
       }
     } catch (msgErr) {
       console.warn('[ReviewSpy] Content script messaging failed, trying direct probe:', msgErr);
@@ -227,6 +263,46 @@ btnAnalyze.addEventListener('click', async () => {
         const injectedResults = await chrome.scripting.executeScript({
           target: { tabId: activeTabInfo.id },
           func: () => {
+            const list = [];
+            const seen = new Set();
+            function add(r) {
+              if (!r || (!r.body && !r.title)) return;
+              const k = (r.body || r.title).slice(0, 100).toLowerCase().trim();
+              if (seen.has(k)) return;
+              seen.add(k);
+              list.push(r);
+            }
+            function parseNode(el, hintDate = '') {
+              let rating = 5;
+              const starEl = el.querySelector('[data-hook*="star-rating"], [class*="a-star-"], .review-rating, i.a-icon-star');
+              const match = starEl?.textContent.match(/([0-5](?:\.[0-9])?)/);
+              if (match) rating = parseFloat(match[1]);
+
+              const titleEl = el.querySelector('[data-hook="review-title"], a.review-title, .review-title, h5');
+              let title = '';
+              if (titleEl) {
+                const clone = titleEl.cloneNode(true);
+                clone.querySelectorAll('.a-icon-alt, i, .a-icon, [class*="star"]').forEach(n => n.remove());
+                title = clone.textContent.trim();
+              }
+
+              const bodyEl = el.querySelector('[data-hook="review-body"], .review-text-content, .review-text, [data-hook="review-collapsed"], .review-data');
+              let body = bodyEl ? bodyEl.textContent.replace(/Read more\s*$/i, '').trim() : '';
+              if (!body) {
+                const clone = el.cloneNode(true);
+                clone.querySelectorAll('button, input, a, .a-profile, [class*="star"], [data-hook="review-date"]').forEach(n => n.remove());
+                const raw = clone.textContent.trim();
+                if (raw.length > 20) body = raw;
+              }
+
+              const dateEl = el.querySelector('[data-hook="review-date"], .review-date');
+              const date = hintDate || (dateEl ? dateEl.textContent.trim() : '');
+              const verified = /Verified Purchase/i.test(el.textContent);
+
+              return { id: el.id || Math.random().toString(36), rating, title, body, date, verified };
+            }
+
+            // Pass 1: Standard Selectors
             const selectors = [
               '[id^="customer_review-"]',
               '[data-hook="review"]',
@@ -234,35 +310,29 @@ btnAnalyze.addEventListener('click', async () => {
               'li[data-hook="review"]',
               '#cm-cr-dp-review-list li',
               '#cm-cr-dp-review-list .a-section.review',
-              '[data-csa-c-content-id^="customer_review-"]'
+              '[data-csa-c-content-id^="customer_review-"]',
+              '.cr-widget-desktop-reviews .a-section'
             ];
-            const found = Array.from(document.querySelectorAll(selectors.join(', ')));
-            return found.map(el => {
-              // Star
-              const starEl = el.querySelector('[data-hook="review-star-rating"], [data-hook="cmps-review-star-rating"], i.a-icon-star, .review-rating');
-              const match = starEl?.textContent.match(/([0-5](?:\.[0-9])?)/);
-              const rating = match ? parseFloat(match[1]) : 5;
+            document.querySelectorAll(selectors.join(', ')).forEach(el => add(parseNode(el)));
 
-              // Title
-              const titleEl = el.querySelector('[data-hook="review-title"], a.review-title, .review-title');
-              let title = '';
-              if (titleEl) {
-                const clone = titleEl.cloneNode(true);
-                clone.querySelectorAll('.a-icon-alt, i, .a-icon').forEach(n => n.remove());
-                title = clone.textContent.trim();
-              }
+            // Pass 2: Semantic Date Landmark ("Reviewed in ... on ...")
+            if (list.length === 0) {
+              document.querySelectorAll('span, div, p').forEach(el => {
+                if (el.children.length <= 1 && /Reviewed in .+ on \w+ \d+/i.test(el.textContent)) {
+                  let container = el.parentElement;
+                  let depth = 0;
+                  while (container && depth < 6) {
+                    if (container.id && (container.id.startsWith('customer_review') || container.id.startsWith('R'))) break;
+                    if (container.querySelector && (container.querySelector('.a-profile-name') || container.querySelector('[class*="star"]'))) break;
+                    container = container.parentElement;
+                    depth++;
+                  }
+                  if (container) add(parseNode(container, el.textContent.trim()));
+                }
+              });
+            }
 
-              // Body
-              const bodyEl = el.querySelector('[data-hook="review-body"], .review-text-content, .review-text, [data-hook="review-collapsed"], .review-data');
-              const body = bodyEl ? bodyEl.textContent.replace(/Read more\s*$/i, '').trim() : '';
-
-              // Date & Verified
-              const dateEl = el.querySelector('[data-hook="review-date"], .review-date');
-              const date = dateEl ? dateEl.textContent.trim() : '';
-              const verified = !!el.querySelector('[data-hook="avp-badge"], [data-hook="avp-badge-linkless"]');
-
-              return { id: el.id || Math.random().toString(36), rating, title, body, date, verified };
-            }).filter(r => r.body || r.title);
+            return list;
           }
         });
 
@@ -273,13 +343,6 @@ btnAnalyze.addEventListener('click', async () => {
       } catch (probeErr) {
         console.warn('[ReviewSpy] Direct script injection failed:', probeErr);
       }
-    }
-
-    // 3. Background fetch fallback if still < 10 reviews
-    if (reviews.length < 10 && currentProduct.platform === 'amazon' && currentProduct.asin) {
-      showLoading('Fetching Review Archive...', 'Querying Amazon reviews page...');
-      const pagedReviews = await fetchAmazonPagedReviews(currentProduct.asin);
-      reviews = deduplicateReviews([...reviews, ...pagedReviews]);
     }
 
     if (reviews.length === 0) {
