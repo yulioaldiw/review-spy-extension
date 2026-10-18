@@ -230,7 +230,9 @@ btnAnalyze.addEventListener('click', async () => {
 
   const quota = await LicenseManager.canAnalyze();
   if (!quota.allowed) {
-    alert('You have reached your monthly free limit (3 analyses). Please upgrade to Pro in Settings for unlimited access!');
+    if (confirm('You have reached your monthly free limit (3 analyses).\n\nWould you like to upgrade to Pro ($19/mo) for unlimited competitor analysis?')) {
+      window.open('https://reviewspy-ai.lemonsqueezy.com/checkout/buy/3fef778e-35c0-480a-a4e5-736efb80b908', '_blank');
+    }
     document.querySelector('[data-tab="tab-settings"]')?.click();
     return;
   }
