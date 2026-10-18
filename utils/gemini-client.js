@@ -22,13 +22,13 @@ export class GeminiClient {
 
         // Priority order: latest fast Flash models
         const priorityPatterns = [
+          /gemini-3\.8-flash/i,
+          /gemini-3\.[0-9]+-flash/i,
+          /gemini-3-flash/i,
+          /gemini-3/i,
           /gemini-2\.5-flash/i,
           /gemini-2\.0-flash/i,
-          /gemini-1\.5-flash-latest/i,
-          /gemini-1\.5-flash/i,
-          /flash/i,
-          /gemini-2/i,
-          /gemini-pro/i
+          /flash/i
         ];
 
         for (const pattern of priorityPatterns) {
@@ -45,8 +45,8 @@ export class GeminiClient {
       console.warn('[ReviewSpy] ListModels discovery error, falling back to static list:', e);
     }
 
-    // Default fallback
-    this.cachedModel = 'gemini-2.0-flash';
+    // Default fallback in 2026
+    this.cachedModel = 'gemini-3.8-flash';
     return this.cachedModel;
   }
 
@@ -115,17 +115,17 @@ Be brutally honest, specific, and actionable. Avoid vague fluff.`;
     // Candidate models to try in case of deprecation / 404
     const resolvedPrimary = await this.resolveModel();
     const candidateModels = Array.from(new Set([
+      'gemini-3.8-flash',
       resolvedPrimary,
-      'gemini-2.0-flash',
-      'gemini-1.5-flash-latest',
+      'gemini-3.0-flash',
       'gemini-2.5-flash',
-      'gemini-1.5-flash',
-      'gemini-pro'
+      'gemini-2.0-flash'
     ]));
 
     let lastError = null;
 
-    for (const model of candidateModels) {
+    for (let i = 0; i < candidateModels.length; i++) {
+      const model = candidateModels[i];
       try {
         console.log(`[ReviewSpy] Calling Gemini API with model: ${model}...`);
         const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
@@ -142,8 +142,24 @@ Be brutally honest, specific, and actionable. Avoid vague fluff.`;
           const errData = await response.json().catch(() => ({}));
           const message = errData?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
 
-          // If model is not found, continue to next candidate model
-          if (response.status === 404 || message.includes('not found') || message.includes('not supported')) {
+          // Self-healing: Extract any model recommended by Google in the error message
+          const suggestedMatch = message.match(/use models\/([a-zA-Z0-9_.-]+)/i);
+          if (suggestedMatch && suggestedMatch[1]) {
+            const suggested = suggestedMatch[1];
+            if (!candidateModels.includes(suggested)) {
+              console.log(`[ReviewSpy] Self-healing: Google recommended ${suggested}, appending to queue.`);
+              candidateModels.push(suggested);
+            }
+          }
+
+          // If model is not found, deprecated, or no longer available, continue to next candidate
+          const isModelUnavailable = response.status === 404 ||
+            message.includes('not found') ||
+            message.includes('not supported') ||
+            message.includes('no longer available') ||
+            message.includes('deprecated');
+
+          if (isModelUnavailable) {
             console.warn(`[ReviewSpy] Model ${model} not available (${message}), trying next candidate...`);
             lastError = new Error(message);
             continue;
