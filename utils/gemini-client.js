@@ -1,8 +1,53 @@
-// ReviewSpy AI - Gemini Client with Strict JSON Output Mode
+// ReviewSpy AI - Gemini Client with Dynamic Model Discovery & Strict JSON Output Mode
 export class GeminiClient {
   constructor(apiKey) {
     this.apiKey = apiKey;
-    this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+    this.cachedModel = null;
+  }
+
+  // Dynamically discovers the active Flash models enabled for this API Key
+  async resolveModel() {
+    if (this.cachedModel) return this.cachedModel;
+
+    try {
+      console.log('[ReviewSpy] Querying ModelService.ListModels to detect active model...');
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${this.apiKey}`);
+      if (res.ok) {
+        const data = await res.json();
+        const models = data.models || [];
+        const contentModels = models.filter(m =>
+          Array.isArray(m.supportedGenerationMethods) &&
+          m.supportedGenerationMethods.includes('generateContent')
+        );
+
+        // Priority order: latest fast Flash models
+        const priorityPatterns = [
+          /gemini-2\.5-flash/i,
+          /gemini-2\.0-flash/i,
+          /gemini-1\.5-flash-latest/i,
+          /gemini-1\.5-flash/i,
+          /flash/i,
+          /gemini-2/i,
+          /gemini-pro/i
+        ];
+
+        for (const pattern of priorityPatterns) {
+          const match = contentModels.find(m => pattern.test(m.name));
+          if (match) {
+            const resolved = match.name.replace(/^models\//, '');
+            console.log(`[ReviewSpy] Successfully resolved active Gemini model: ${resolved}`);
+            this.cachedModel = resolved;
+            return resolved;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ReviewSpy] ListModels discovery error, falling back to static list:', e);
+    }
+
+    // Default fallback
+    this.cachedModel = 'gemini-2.0-flash';
+    return this.cachedModel;
   }
 
   async analyzeReviews(productTitle, reviews) {
@@ -67,36 +112,71 @@ Be brutally honest, specific, and actionable. Avoid vague fluff.`;
       }
     };
 
-    const response = await fetch(`${this.baseUrl}?key=${this.apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(requestBody)
-    });
+    // Candidate models to try in case of deprecation / 404
+    const resolvedPrimary = await this.resolveModel();
+    const candidateModels = Array.from(new Set([
+      resolvedPrimary,
+      'gemini-2.0-flash',
+      'gemini-1.5-flash-latest',
+      'gemini-2.5-flash',
+      'gemini-1.5-flash',
+      'gemini-pro'
+    ]));
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      const message = errData?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
-      if (response.status === 400 || response.status === 403) {
-        throw new Error(`Invalid Gemini API Key or permission denied: ${message}`);
+    let lastError = null;
+
+    for (const model of candidateModels) {
+      try {
+        console.log(`[ReviewSpy] Calling Gemini API with model: ${model}...`);
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`;
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          const message = errData?.error?.message || `HTTP ${response.status}: ${response.statusText}`;
+
+          // If model is not found, continue to next candidate model
+          if (response.status === 404 || message.includes('not found') || message.includes('not supported')) {
+            console.warn(`[ReviewSpy] Model ${model} not available (${message}), trying next candidate...`);
+            lastError = new Error(message);
+            continue;
+          }
+
+          if (response.status === 400 || response.status === 403) {
+            throw new Error(`Invalid Gemini API Key or permission denied: ${message}`);
+          }
+
+          throw new Error(`Gemini API Error: ${message}`);
+        }
+
+        const data = await response.json();
+        const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (!candidateText) {
+          throw new Error('No analysis generated from Gemini API.');
+        }
+
+        // Parse and return JSON
+        const parsedJson = JSON.parse(candidateText);
+        this.cachedModel = model; // Cache working model
+        return parsedJson;
+
+      } catch (err) {
+        // If it's an API key error, throw immediately
+        if (err.message.includes('Invalid Gemini API Key')) {
+          throw err;
+        }
+        lastError = err;
       }
-      throw new Error(`Gemini API Error: ${message}`);
     }
 
-    const data = await response.json();
-    const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!candidateText) {
-      throw new Error('No analysis generated from Gemini API.');
-    }
-
-    try {
-      const parsedJson = JSON.parse(candidateText);
-      return parsedJson;
-    } catch (parseErr) {
-      console.error('Failed to parse Gemini output:', candidateText);
-      throw new Error('Received malformed JSON from AI model. Please retry.');
-    }
+    throw lastError || new Error('All candidate Gemini models failed to generate content.');
   }
 }
